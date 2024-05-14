@@ -2,7 +2,7 @@ import numpy as np
 import networkx as nx
 import matplotlib.pyplot as plt
 import itertools
-from net_node import Node
+from node import Node
 
 
 def distance(node1, node2):
@@ -16,11 +16,12 @@ def random_in_radius(center, radius):
 
 
 class Network:
-    def __init__(self, area_width, area_height, radius, nodes_count, steps, key_mode):
+    def __init__(self, area_width, area_height, radius, nodes_count, steps):
 
         center = (area_width / 2, area_height / 2)
 
-        self.key_mode = key_mode
+        self.key_mode = False
+        self.control_mode = False
         self.debug_mode = False
 
         self.area_width = area_width
@@ -50,12 +51,11 @@ class Network:
 
         self.find_critical_nodes()
 
-        if control_mode:
-            self.manage_critical()
+        if self.control_mode:
+            self.manage_critical_nodes()
 
-        self.draw(ax)
-
-        self.connectivity_history.append(nx.number_connected_components(self.G))
+        if self.debug_mode:
+            self.draw(ax)
 
     def find_critical_nodes(self):
         # отмечаем все узлы, как некритические
@@ -69,59 +69,41 @@ class Network:
         self.update_edges(self.G_next)
 
         # раскрашиваем компоненты связности графа G в разные цвета
-        components = nx.connected_components(self.G_next)
-        current_color = 0
-        for component in components:
-            for node in component:
-                node.origin.color = current_color
-            current_color += 1
+        components = list(nx.connected_components(self.G_next))
+        num_of_components = len(components)
 
-        # если отсутствует ребро между компонентами связности, то узлы критические
-        for edge in self.G.edges():
-            n1, n2 = edge
-            if n1.color != n2.color:
-                n1.is_critical = True
-                n2.is_critical = True
+        if num_of_components > 1:
+            current_color = 0
+            for component in components:
+                for node in component:
+                    node.origin.color = current_color
+                current_color += 1
 
-                v = np.array([n2.x - n1.x, n2.y - n1.y])
-                v_norm = np.linalg.norm(v)
+            # если отсутствует ребро между компонентами связности, то узлы критические
+            for edge in self.G.edges():
+                n1, n2 = edge
+                if n1.color != n2.color:
+                    n1.is_critical = True
+                    n2.is_critical = True
 
-                # расчеты для интерполяции
-                self.managed_vectors[n1] += v * v_norm
-                self.managed_vectors[n2] += -self.managed_vectors[n1]
+                    v = np.array([n2.x - n1.x, n2.y - n1.y])
+                    v_norm = np.linalg.norm(v)
 
-                self.managed_sums[n2] += v_norm
-                self.managed_sums[n1] += v_norm
+                    # расчеты для интерполяции
+                    self.managed_vectors[n1] += v * v_norm
+                    self.managed_vectors[n2] += -v * v_norm
 
-    def manage_critical(self):
+                    self.managed_sums[n1] += v_norm
+                    self.managed_sums[n2] += v_norm
+
+        # обновляем статистику
+        self.connectivity_history.append(nx.number_connected_components(self.G))
+
+    def manage_critical_nodes(self):
         for node in self.G.nodes:
             if node.is_critical:
                 v = self.managed_vectors[node] / self.managed_sums[node]
                 node.manage(direction=(v[0], v[1]))
-
-    # def manage_critical_nodes(self):
-    #     for node in self.G.nodes:
-    #         if node.is_critical:
-    #             neighbours = self.G.neighbors(node)
-    #             c_n = []
-    #
-    #             for n in neighbours:
-    #                 if n.is_critical:
-    #                     c_n.append(n)
-    #
-    #             # линейная интерполяция
-    #             s = 0
-    #             result = (0, 0)
-    #
-    #             for n in c_n:
-    #                 v = (n.x - node.x, n.y - node.y)
-    #                 len = np.sqrt(v[0] ** 2 + v[1] ** 2)
-    #                 result = (v[0] * len, v[1] * len)
-    #                 s += len
-    #
-    #             result = (result[0] / s, result[1] / s)
-    #
-    #             node.manage(direction=(result[0], result[1]))
 
     def move_nodes(self):
         for node in self.G.nodes:
@@ -140,15 +122,16 @@ class Network:
 
     def draw(self, ax):
         ax.clear()
-        ax.set_title('С управлением')
+        ax.set_title('С управлением' if self.control_mode else 'Без управления')
         ax.set_xlim(0, self.area_width)
         ax.set_ylim(0, self.area_height)
 
         colors = ['red' if node.is_critical else 'blue' for node in self.G.nodes()]
 
-        if self.debug_mode:
-            pos = {node: (node.x, node.y) for node in self.G_next.nodes}
-            nx.draw(self.G_next, pos=pos, ax=ax, node_size=50, with_labels=False, edge_color='grey', alpha=0.4)
+        # отрисовка симуляции
+        # if self.debug_mode:
+        #     pos = {node: (node.x, node.y) for node in self.G_next.nodes}
+        #     nx.draw(self.G_next, pos=pos, ax=ax, node_size=50, with_labels=False, edge_color='grey', alpha=0.4)
 
         pos = {node: (node.x, node.y) for node in self.G.nodes}
         nx.draw(self.G, pos=pos, ax=ax, node_size=50, with_labels=False, edge_color='gray', node_color=colors)
@@ -159,15 +142,22 @@ class Network:
         else:
             plt.pause(0.001)
 
-    def start(self, debug_mode=False):
+    def start(self, control_mode=False, key_mode=False, debug_mode=False):
         self.debug_mode = debug_mode
+        self.key_mode = key_mode
+        self.control_mode = control_mode
 
         plt.ion()
         fig, ax = plt.subplots(figsize=(8, 6))
 
-        # with control
         for step in range(self.steps):
             self.step(ax)
 
         plt.ioff()
+        plt.show()
+
+        plt.title("Статистика связности сети")
+        plt.plot(range(self.steps), self.connectivity_history)
+        plt.xlabel("Время")
+        plt.ylabel("Кол-во компонент связности")
         plt.show()
